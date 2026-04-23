@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    /* =============================================
+     * Popup расширения — настройки скорости.
+     * Минимальный UI: настройки клавиш, шага, preferred speed.
+     * Ширина фиксирована — стандарт для popup Chrome-расширений.
+     * ============================================= */
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      width: 320px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 13px;
+      color: #333;
+      background: #fff;
+      padding: 16px;
+    }
+
+    h1 {
+      font-size: 15px;
+      font-weight: 600;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    h1 .icon {
+      font-size: 18px;
+    }
+
+    /* Секция настроек */
+    .section {
+      margin-bottom: 14px;
+    }
+
+    .section-title {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: #888;
+      margin-bottom: 8px;
+    }
+
+    /* Строка настройки: метка + поле ввода */
+    .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 4px 0;
+    }
+
+    .row label {
+      flex: 1;
+    }
+
+    .row input[type="number"],
+    .row input[type="text"] {
+      width: 60px;
+      padding: 4px 6px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 13px;
+      text-align: center;
+    }
+
+    .row input[type="number"]:focus,
+    .row input[type="text"]:focus {
+      outline: none;
+      border-color: #4a9eff;
+    }
+
+    .row input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+    }
+
+    /* Таблица горячих клавиш */
+    .keys-grid {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 4px 8px;
+      align-items: center;
+    }
+
+    .keys-grid .key-input {
+      width: 40px;
+      padding: 4px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 13px;
+      text-align: center;
+      text-transform: uppercase;
+    }
+
+    .keys-grid .key-input:focus {
+      outline: none;
+      border-color: #4a9eff;
+      background: #f0f7ff;
+    }
+
+    /* Кнопки */
+    .actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    button {
+      flex: 1;
+      padding: 6px 12px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      background: #f8f8f8;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: #eee;
+    }
+
+    button.primary {
+      background: #4a9eff;
+      color: #fff;
+      border-color: #4a9eff;
+    }
+
+    button.primary:hover {
+      background: #3a8eef;
+    }
+
+    /* Статус сохранения */
+    .status {
+      text-align: center;
+      font-size: 11px;
+      color: #4caf50;
+      margin-top: 8px;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+
+    .status.visible {
+      opacity: 1;
+    }
+
+    /* Разделитель */
+    hr {
+      border: none;
+      border-top: 1px solid #eee;
+      margin: 12px 0;
+    }
+  </style>
+</head>
+<body>
+
+  <h1><span class="icon">⏩</span> HTML5 Media Controller</h1>
+
+  <!-- ================================
+       Секция: основные настройки
+       ================================ -->
+  <div class="section">
+    <div class="section-title">Скорость</div>
+
+    <div class="row">
+      <label for="speedStep">Шаг изменения</label>
+      <input type="number" id="speedStep" min="0.05" max="1" step="0.05" value="0.1">
+    </div>
+
+    <div class="row">
+      <label for="preferredSpeed">Любимая скорость</label>
+      <input type="number" id="preferredSpeed" min="0.1" max="16" step="0.1" value="2.0">
+    </div>
+
+    <div class="row">
+      <label for="seekStep">Перемотка (сек)</label>
+      <input type="number" id="seekStep" min="1" max="60" step="1" value="10">
+    </div>
+
+    <div class="row">
+      <label for="overlayOpacity">Прозрачность overlay</label>
+      <input type="number" id="overlayOpacity" min="0.1" max="1" step="0.1" value="0.3">
+    </div>
+  </div>
+
+  <hr>
+
+  <!-- ================================
+       Секция: переключатели
+       ================================ -->
+  <div class="section">
+    <div class="row">
+      <label for="rememberSpeed">Запоминать скорость</label>
+      <input type="checkbox" id="rememberSpeed" checked>
+    </div>
+
+    <div class="row">
+      <label for="blockAutoplay">Блокировать autoplay</label>
+      <input type="checkbox" id="blockAutoplay" checked>
+    </div>
+  </div>
+
+  <hr>
+
+  <!-- ================================
+       Секция: горячие клавиши
+       ================================ -->
+  <div class="section">
+    <div class="section-title">Горячие клавиши</div>
+
+    <div class="keys-grid">
+      <span>Медленнее</span>
+      <input type="text" class="key-input" id="keySlower" maxlength="1" value="S">
+
+      <span>Быстрее</span>
+      <input type="text" class="key-input" id="keyFaster" maxlength="1" value="D">
+
+      <span>Сброс (1.0x)</span>
+      <input type="text" class="key-input" id="keyReset" maxlength="1" value="R">
+
+      <span>Назад</span>
+      <input type="text" class="key-input" id="keyRewind" maxlength="1" value="Z">
+
+      <span>Вперёд</span>
+      <input type="text" class="key-input" id="keyAdvance" maxlength="1" value="X">
+
+      <span>Любимая скорость</span>
+      <input type="text" class="key-input" id="keyPreferred" maxlength="1" value="G">
+
+      <span>Показать/скрыть</span>
+      <input type="text" class="key-input" id="keyToggle" maxlength="1" value="V">
+    </div>
+  </div>
+
+  <!-- ================================
+       Кнопки сохранения
+       ================================ -->
+  <div class="actions">
+    <button id="resetBtn">Сброс</button>
+    <button id="saveBtn" class="primary">Сохранить</button>
+  </div>
+
+  <div class="status" id="status">Настройки сохранены</div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

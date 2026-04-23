@@ -1,214 +1,212 @@
 /**
- * Content Script (Isolated World) — блокировка autoplay через DOM-манипуляции
+ * Content Script (Isolated World)
  *
- * Этот скрипт работает в изолированном мире (ISOLATED world).
- * Он не имеет доступа к JS-контексту страницы, но может манипулировать DOM.
+ * Две задачи:
+ * 1. Блокировка autoplay — MutationObserver + снятие атрибута autoplay
+ * 2. Мост настроек — читает chrome.storage.sync и передаёт в MAIN world
+ *    через CustomEvent (speed-controller.js не имеет доступа к chrome API)
  *
- * Стратегия:
- * - Удаляем атрибут autoplay у всех <video> и <audio> элементов
- * - Принудительно паузим элементы, которые начали воспроизведение
- * - Используем MutationObserver для отслеживания динамически добавленных элементов
- *
- * Зачем нужен этот скрипт в дополнение к main-world.js:
- * - Атрибут autoplay обрабатывается браузером ДО выполнения JS
- * - Некоторые элементы могут начать воспроизведение через атрибут,
- *   минуя вызов play() в JS
- * - MutationObserver ловит элементы, которые добавляются в DOM динамически
- *   (SPA-навигация, lazy loading, бесконечная прокрутка)
+ * Зачем ISOLATED world для моста:
+ * MAIN world скрипты не могут обращаться к chrome.storage API —
+ * это доступно только content scripts в isolated world.
+ * Передаём настройки через CustomEvent на document.
  */
 
 (function () {
   'use strict';
 
   // =========================================================================
-  // CSS-селектор для медиа-элементов
+  // Настройки по умолчанию (дублируем для автономности)
+  // =========================================================================
+
+  var DEFAULTS = {
+    speedStep: 0.1,
+    preferredSpeed: 2.0,
+    seekStep: 10,
+    overlayOpacity: 0.3,
+    rememberSpeed: true,
+    blockAutoplay: true,
+    keys: {
+      slower: 's',
+      faster: 'd',
+      reset: 'r',
+      rewind: 'z',
+      advance: 'x',
+      preferred: 'g',
+      toggle: 'v'
+    }
+  };
+
+  // =========================================================================
+  // Мост настроек: chrome.storage → MAIN world
   // =========================================================================
 
   /**
-   * Селектор для поиска video и audio элементов.
-   * Используется в querySelectorAll и при проверке добавленных нод.
-   */
-  const MEDIA_SELECTOR = 'video, audio';
-
-  // =========================================================================
-  // Обработка отдельного медиа-элемента
-  // =========================================================================
-
-  /**
-   * Обезвреживает один медиа-элемент:
-   * 1. Удаляет атрибут autoplay — предотвращает автозапуск браузером
-   * 2. Паузит элемент — останавливает уже начавшееся воспроизведение
-   * 3. Сбрасывает позицию — возвращает в начало, чтобы пользователь
-   *    не пропустил контент при ручном запуске
+   * Передаёт настройки в MAIN world через CustomEvent.
+   * speed-controller.js слушает событие 'vsc-settings-update' на document.
    *
-   * @param {HTMLMediaElement} element — video или audio элемент
+   * Используем CustomEvent с detail — безопасный способ передачи данных
+   * между isolated и main world. Данные клонируются structured clone алгоритмом.
+   *
+   * @param {Object} settings — объект настроек
+   */
+  function sendSettingsToMainWorld(settings) {
+    document.dispatchEvent(new CustomEvent('vsc-settings-update', {
+      detail: settings
+    }));
+  }
+
+  /**
+   * Загружаем настройки из chrome.storage.sync и отправляем в MAIN world.
+   * Вызывается при инициализации и при изменении настроек.
+   */
+  function loadAndSendSettings() {
+    chrome.storage.sync.get(DEFAULTS, function (settings) {
+      sendSettingsToMainWorld(settings);
+    });
+  }
+
+  /**
+   * Слушаем изменения настроек в chrome.storage.
+   * Срабатывает когда пользователь сохраняет настройки в popup.
+   * Обновляем MAIN world без перезагрузки страницы.
+   */
+  chrome.storage.onChanged.addListener(function (changes, area) {
+    if (area !== 'sync') return;
+    loadAndSendSettings();
+  });
+
+  // Отправляем настройки при загрузке.
+  // Небольшая задержка — speed-controller.js должен успеть зарегистрировать listener.
+  // requestAnimationFrame гарантирует что MAIN world скрипт уже выполнился.
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function () {
+      requestAnimationFrame(loadAndSendSettings);
+    });
+  } else {
+    requestAnimationFrame(loadAndSendSettings);
+  }
+
+  /**
+   * MAIN world может запросить настройки повторно через CustomEvent.
+   * Это нужно если speed-controller.js загрузился позже content.js
+   * и пропустил первоначальную отправку.
+   */
+  document.addEventListener('vsc-request-settings', function () {
+    loadAndSendSettings();
+  });
+
+  // =========================================================================
+  // Блокировка autoplay
+  // =========================================================================
+
+  var MEDIA_SELECTOR = 'video, audio';
+
+  /**
+   * Текущее состояние настройки blockAutoplay.
+   * Обновляется при получении настроек из storage.
+   * По умолчанию true — блокируем до получения настроек.
+   */
+  var blockAutoplayEnabled = true;
+
+  /**
+   * Обновляем флаг blockAutoplay при получении настроек.
+   */
+  chrome.storage.sync.get({ blockAutoplay: true }, function (result) {
+    blockAutoplayEnabled = result.blockAutoplay;
+  });
+
+  chrome.storage.onChanged.addListener(function (changes, area) {
+    if (area === 'sync' && changes.blockAutoplay) {
+      blockAutoplayEnabled = changes.blockAutoplay.newValue;
+    }
+  });
+
+  /**
+   * Обезвреживает медиа-элемент: снимает autoplay, паузит, сбрасывает позицию.
+   * Пропускает обработку если blockAutoplay отключён в настройках.
+   *
+   * @param {HTMLMediaElement} element
    */
   function disableAutoplay(element) {
-    // Удаляем HTML-атрибут autoplay.
-    // Без этого браузер может повторно запустить воспроизведение
-    // при определённых условиях (например, при перемещении элемента в DOM)
+    if (!blockAutoplayEnabled) return;
+
+    // Удаляем HTML-атрибут autoplay
     if (element.hasAttribute('autoplay')) {
       element.removeAttribute('autoplay');
     }
 
-    // Также сбрасываем JS-свойство autoplay.
-    // Атрибут и свойство — разные вещи в DOM API.
-    // removeAttribute убирает HTML-атрибут, но JS-свойство может остаться true.
+    // Сбрасываем JS-свойство (атрибут и свойство — разные вещи в DOM)
     element.autoplay = false;
 
-    // Паузим элемент. pause() безопасен даже если элемент уже на паузе.
-    // Важно вызвать именно pause(), а не просто убрать autoplay,
-    // потому что элемент мог уже начать воспроизведение.
+    // Паузим (безопасно вызывать даже если уже на паузе)
     element.pause();
 
-    // Сбрасываем позицию воспроизведения в начало.
-    // Без этого пользователь может пропустить первые секунды контента,
-    // которые успели проиграть до нашего перехвата.
-    // Проверяем readyState: currentTime можно менять только если
-    // метаданные загружены (readyState >= 1 / HAVE_METADATA)
+    // Сбрасываем позицию (только если метаданные загружены)
     if (element.readyState >= 1) {
       element.currentTime = 0;
     }
   }
 
-  // =========================================================================
-  // Обработка поддерева DOM
-  // =========================================================================
-
   /**
-   * Ищет и обезвреживает все медиа-элементы внутри данного узла.
-   * Нужна для обработки добавленных поддеревьев через MutationObserver.
+   * Обрабатывает добавленную DOM-ноду: ищет video/audio внутри.
    *
-   * Проверяем сам узел (может быть video/audio)
-   * и всех потомков (может быть div с video внутри).
-   *
-   * @param {Node} node — добавленный DOM-узел
+   * @param {Node} node
    */
   function processNode(node) {
-    // MutationObserver может сообщать о текстовых нодах и комментариях —
-    // у них нет matches() и querySelectorAll(), пропускаем
-    if (node.nodeType !== Node.ELEMENT_NODE) {
-      return;
-    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
 
-    // Проверяем сам узел: может быть непосредственно <video> или <audio>
     if (node.matches(MEDIA_SELECTOR)) {
       disableAutoplay(node);
     }
 
-    // Проверяем потомков: узел может быть контейнером (div, section),
-    // внутри которого находятся медиа-элементы
     var mediaElements = node.querySelectorAll(MEDIA_SELECTOR);
     mediaElements.forEach(disableAutoplay);
   }
 
   // =========================================================================
-  // MutationObserver — отслеживание динамических изменений DOM
+  // MutationObserver — динамические медиа-элементы
   // =========================================================================
 
-  /**
-   * MutationObserver следит за добавлением новых нод в DOM.
-   *
-   * Зачем: SPA-приложения (React, Vue, Angular) добавляют контент динамически.
-   * Видео может появиться в DOM через секунды или минуты после загрузки страницы.
-   * Без observer мы бы пропустили все динамически добавленные медиа-элементы.
-   *
-   * Настройки:
-   * - childList: true — следим за добавлением/удалением дочерних нод
-   * - subtree: true — следим за всем поддеревом, а не только прямыми потомками
-   *
-   * Производительность:
-   * MutationObserver работает асинхронно — браузер группирует мутации
-   * и вызывает callback пачками, не блокируя рендеринг.
-   */
   var observer = new MutationObserver(function (mutations) {
     mutations.forEach(function (mutation) {
-      // Обрабатываем только добавленные ноды.
-      // Удалённые ноды нас не интересуют — если элемент убрали,
-      // он и так перестаёт воспроизводиться.
       mutation.addedNodes.forEach(processNode);
     });
   });
 
-  // Начинаем наблюдение за document.documentElement (корневой <html> элемент).
-  // run_at: document_start гарантирует, что скрипт выполнится до парсинга <body>,
-  // но <html> уже существует — можем привязать observer.
-  //
-  // Если documentElement ещё не существует (крайне редкий edge case),
-  // ждём DOMContentLoaded.
   if (document.documentElement) {
-    observer.observe(document.documentElement, {
-      childList: true,
-      subtree: true
-    });
+    observer.observe(document.documentElement, { childList: true, subtree: true });
   } else {
     document.addEventListener('DOMContentLoaded', function () {
-      observer.observe(document.documentElement, {
-        childList: true,
-        subtree: true
-      });
+      observer.observe(document.documentElement, { childList: true, subtree: true });
     });
   }
 
-  // =========================================================================
-  // Обработка уже существующих элементов
-  // =========================================================================
-
-  /**
-   * При DOMContentLoaded обрабатываем все медиа-элементы,
-   * которые были в HTML-разметке с самого начала.
-   *
-   * MutationObserver мог пропустить элементы, которые были
-   * в начальном HTML до подключения observer.
-   * Этот проход — страховка на такой случай.
-   */
+  // Обработка существующих элементов при DOMContentLoaded
   document.addEventListener('DOMContentLoaded', function () {
     var existingMedia = document.querySelectorAll(MEDIA_SELECTOR);
     existingMedia.forEach(disableAutoplay);
   });
 
-  /**
-   * Дополнительная страховка: слушаем событие play на уровне document.
-   * Если какой-то элемент всё-таки начал воспроизведение
-   * (например, через хитрый timing или Web API, который мы не учли),
-   * ловим событие play и паузим элемент.
-   *
-   * Используем capture phase (третий аргумент true),
-   * чтобы поймать событие до того, как его обработают
-   * скрипты страницы и потенциально отменят всплытие.
-   *
-   * Проверяем isTrusted: нас интересуют только реальные события
-   * воспроизведения, а не синтетические (dispatchEvent).
-   *
-   * Важно: НЕ блокируем если пользователь взаимодействовал.
-   * Определяем это через navigator.userActivation.isActive —
-   * стандартный API браузера для проверки user activation state.
-   */
-  document.addEventListener('play', function (event) {
-    // Пропускаем синтетические события
-    if (!event.isTrusted) {
-      return;
-    }
+  // =========================================================================
+  // Страховка: перехват события play без user activation
+  // =========================================================================
 
-    // Проверяем, есть ли активная user activation.
-    // navigator.userActivation — стандартный API (Chrome 72+).
-    // isActive = true, если пользователь недавно взаимодействовал.
-    if (navigator.userActivation && navigator.userActivation.isActive) {
-      return;
-    }
+  document.addEventListener('play', function (event) {
+    if (!blockAutoplayEnabled) return;
+    if (!event.isTrusted) return;
+
+    // Разрешаем если есть user activation
+    if (navigator.userActivation && navigator.userActivation.isActive) return;
 
     var target = event.target;
-
-    // Проверяем, что событие пришло от медиа-элемента
     if (target instanceof HTMLMediaElement) {
       target.pause();
-
-      // Сбрасываем позицию если метаданные загружены
       if (target.readyState >= 1) {
         target.currentTime = 0;
       }
     }
-  }, true); // capture: true — ловим на фазе погружения
+  }, true);
 
-  console.log('[Autoplay Blocker] Content script loaded — DOM-наблюдение активно');
+  console.log('[HTML5 Media Controller] Content script loaded');
 })();
