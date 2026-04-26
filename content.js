@@ -207,6 +207,4 @@
       }
     }
   }, true);
-
-  console.log('[HTML5 Media Controller] Content script loaded');
 })();

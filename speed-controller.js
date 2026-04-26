@@ -1062,6 +1062,4 @@
     // DOM уже загружен — сканируем сразу
     scanExisting();
   }
-
-  console.log('[HTML5 Media Controller] Speed controller loaded — текущая скорость: ' + currentSpeed + 'x');
 })();

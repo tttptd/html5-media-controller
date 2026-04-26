@@ -130,6 +130,4 @@
     );
   };
 
-  // Лог для отладки — видно в консоли DevTools
-  console.log('[Autoplay Blocker] Main world script loaded — play() перехвачен');
 })();
