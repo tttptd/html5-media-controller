@@ -63,6 +63,14 @@
     REMEMBER_SPEED: true,
 
     /**
+     * Хосты, где кнопка Play/Pause не нужна: сайт уже имеет свой player UI.
+     * Проверяются строго через location.hostname, без поиска подстроки.
+     */
+    PLAY_BUTTON_DISABLED_HOSTS: [
+      'youtube.com'
+    ],
+
+    /**
      * Горячие клавиши.
      * Каждое значение — код клавиши (event.key).
      * Модификаторы не используются — клавиши работают без Ctrl/Alt/Shift.
@@ -167,6 +175,29 @@
       // localStorage может быть недоступен (private browsing, iframe restrictions)
     }
     return null;
+  }
+
+  /**
+   * Строгая проверка текущего hostname.
+   * Разрешаем только точный домен или его поддомены: youtube.com, www.youtube.com.
+   */
+  function isCurrentHostInList(hosts) {
+    var hostname = window.location.hostname.toLowerCase();
+    if (hostname.charAt(hostname.length - 1) === '.') {
+      hostname = hostname.slice(0, -1);
+    }
+
+    return hosts.some(function (host) {
+      var normalizedHost = host.toLowerCase();
+      return hostname === normalizedHost || hostname.slice(-(normalizedHost.length + 1)) === '.' + normalizedHost;
+    });
+  }
+
+  /**
+   * Проверяет, отключена ли кнопка Play/Pause для текущего сайта.
+   */
+  function isPlayButtonDisabledForCurrentHost() {
+    return isCurrentHostInList(CONFIG.PLAY_BUTTON_DISABLED_HOSTS);
   }
 
   /**
@@ -417,6 +448,7 @@
     this.media = media;
     this.overlay = null;
     this.playBtn = null;       // Кнопка play поверх видео
+    this.controlsObserver = null;
     this.showTimer = null;
     this.isOverlayHidden = false; // Пользователь скрыл overlay клавишей V
 
@@ -461,6 +493,7 @@
     this._createPlayButton();
     this._attachOverlay();
     this._listenPlayPause();
+    this._listenControlsChange();
   };
 
   /**
@@ -551,6 +584,50 @@
   };
 
   /**
+   * Проверяет наличие нативных контролов браузера.
+   * Если controls включены, наша кнопка play/pause дублирует UI страницы.
+   */
+  SpeedController.prototype._hasVisibleNativeControls = function () {
+    return this.media.controls === true;
+  };
+
+  /**
+   * Удаляет кнопку Play/Pause из DOM, если она была создана.
+   */
+  SpeedController.prototype._removePlayButton = function () {
+    if (this.playBtn && this.playBtn.parentNode) {
+      this.playBtn.parentNode.removeChild(this.playBtn);
+    }
+
+    this.playBtn = null;
+  };
+
+  /**
+   * Синхронизирует кнопку Play/Pause с текущим состоянием media.controls.
+   */
+  SpeedController.prototype._syncPlayButtonWithControls = function () {
+    if (this.media.tagName === 'AUDIO') return;
+
+    if (isPlayButtonDisabledForCurrentHost()) {
+      this._removePlayButton();
+      return;
+    }
+
+    if (this._hasVisibleNativeControls()) {
+      this._removePlayButton();
+      return;
+    }
+
+    if (this.playBtn) return;
+
+    this._createPlayButton();
+
+    if (this.playBtn && this.overlay && this.overlay.parentNode) {
+      this.overlay.parentNode.appendChild(this.playBtn);
+    }
+  };
+
+  /**
    * Создание кнопки Play/Pause поверх видео.
    *
    * Поведение:
@@ -569,6 +646,12 @@
   SpeedController.prototype._createPlayButton = function () {
     // Для audio — не создаём (нет визуальной области)
     if (this.media.tagName === 'AUDIO') return;
+
+    // Для отдельных хостов не дублируем play/pause поверх штатного плеера.
+    if (isPlayButtonDisabledForCurrentHost()) return;
+
+    // Если у видео есть нативные controls, не дублируем их своей кнопкой.
+    if (this._hasVisibleNativeControls()) return;
 
     // Не создаём для крошечных видео (превью, фоновые анимации)
     if (this.media.offsetWidth < 40 || this.media.offsetHeight < 40) return;
@@ -632,17 +715,17 @@
    * Это управляет и видимостью кнопки, и отображаемой иконкой.
    */
   SpeedController.prototype._listenPlayPause = function () {
-    if (!this.playBtn) return;
-
-    var btn = this.playBtn;
+    var self = this;
 
     /**
      * Устанавливает состояние кнопки.
      * @param {boolean} paused — true = иконка play (видна), false = иконка pause (скрыта до hover)
      */
     function setState(paused) {
-      btn.classList.toggle('vsc-paused', paused);
-      btn.classList.toggle('vsc-playing', !paused);
+      if (!self.playBtn) return;
+
+      self.playBtn.classList.toggle('vsc-paused', paused);
+      self.playBtn.classList.toggle('vsc-playing', !paused);
     }
 
     // play/playing → состояние "playing" (иконка pause, скрыта до hover на видео)
@@ -654,6 +737,25 @@
 
     // ended → показываем play для повторного просмотра
     this.media.addEventListener('ended', function () { setState(true); });
+  };
+
+  /**
+   * Следит за динамическим изменением атрибута controls.
+   * Многие сайты включают/выключают нативные контролы после загрузки видео.
+   */
+  SpeedController.prototype._listenControlsChange = function () {
+    if (this.media.tagName === 'AUDIO') return;
+    if (typeof MutationObserver === 'undefined') return;
+
+    var self = this;
+    this.controlsObserver = new MutationObserver(function () {
+      self._syncPlayButtonWithControls();
+    });
+
+    this.controlsObserver.observe(this.media, {
+      attributes: true,
+      attributeFilter: ['controls']
+    });
   };
 
   /**
@@ -822,6 +924,9 @@
     }
     if (this.playBtn && this.playBtn.parentNode) {
       this.playBtn.parentNode.removeChild(this.playBtn);
+    }
+    if (this.controlsObserver) {
+      this.controlsObserver.disconnect();
     }
     clearTimeout(this.showTimer);
     delete this.media.__vsc;
