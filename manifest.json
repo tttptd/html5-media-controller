@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
   "name": "HTML5 Media Controller",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Block autoplay and control playback speed for all HTML5 video/audio elements",
 
-  "permissions": ["storage"],
+  "permissions": ["storage", "activeTab"],
 
   "content_scripts": [
     {

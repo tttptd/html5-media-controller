@@ -129,6 +129,15 @@
       background: #eee;
     }
 
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+
+    button:disabled:hover {
+      background: #f8f8f8;
+    }
+
     button.primary {
       background: #4a9eff;
       color: #fff;
@@ -158,6 +167,73 @@
       border: none;
       border-top: 1px solid #eee;
       margin: 12px 0;
+    }
+
+    .site-host {
+      margin-bottom: 8px;
+      padding: 6px 8px;
+      border: 1px solid #eee;
+      border-radius: 4px;
+      background: #fafafa;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      word-break: break-all;
+    }
+
+    .site-host.disabled {
+      color: #888;
+      font-family: inherit;
+    }
+
+    .radio-row {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+
+    .radio-row label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .exceptions-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    .exception-item {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      align-items: center;
+      padding: 6px 0;
+      border-top: 1px solid #f0f0f0;
+    }
+
+    .exception-host {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      word-break: break-all;
+    }
+
+    .exception-mode {
+      color: #777;
+      font-size: 11px;
+      margin-top: 2px;
+    }
+
+    .exception-remove {
+      flex: 0 0 auto;
+      padding: 4px 8px;
+    }
+
+    .empty-list {
+      color: #888;
+      font-size: 12px;
     }
   </style>
 </head>
@@ -207,6 +283,32 @@
       <label for="blockAutoplay">Блокировать autoplay</label>
       <input type="checkbox" id="blockAutoplay" checked>
     </div>
+  </div>
+
+  <hr>
+
+  <!-- ================================
+       Секция: исключения autoplay
+       ================================ -->
+  <div class="section">
+    <div class="section-title">Исключения autoplay</div>
+
+    <div class="site-host" id="currentSiteHost">Определение сайта...</div>
+
+    <div class="radio-row">
+      <label>
+        <input type="radio" name="exceptionMode" id="exceptionExact" value="exact" checked>
+        Только этот сайт
+      </label>
+      <label>
+        <input type="radio" name="exceptionMode" id="exceptionSubdomains" value="subdomains">
+        Сайт и поддомены
+      </label>
+    </div>
+
+    <button id="toggleSiteExceptionBtn">Добавить текущий сайт</button>
+
+    <div class="exceptions-list" id="exceptionsList"></div>
   </div>
 
   <hr>

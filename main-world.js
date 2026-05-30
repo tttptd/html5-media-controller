@@ -6,6 +6,7 @@
  *
  * Стратегия:
  * - Сохраняем оригинальный метод play()
+ * - Получаем эффективную настройку blockAutoplay из content.js
  * - Заменяем его на обёртку, которая проверяет наличие user gesture
  * - Если пользователь не взаимодействовал со страницей — блокируем воспроизведение
  * - Если был клик/нажатие клавиши — пропускаем play() как обычно
@@ -55,6 +56,22 @@
   const GESTURE_WINDOW_MS = 1000;
 
   /**
+   * Эффективная настройка блокировки для текущего сайта.
+   * content.js учитывает глобальный blockAutoplay и локальные исключения,
+   * потому что MAIN world не имеет доступа к chrome.storage.
+   */
+  let blockAutoplayEffective = true;
+
+  document.addEventListener('vsc-settings-update', function (e) {
+    const settings = e.detail;
+    if (!settings || typeof settings.blockAutoplayEffective !== 'boolean') return;
+
+    blockAutoplayEffective = settings.blockAutoplayEffective;
+  });
+
+  document.dispatchEvent(new CustomEvent('vsc-request-settings'));
+
+  /**
    * Обработчик user gesture.
    * Устанавливает флаг и запускает таймер на его сброс.
    * Используем capture: true чтобы поймать событие до того,
@@ -95,16 +112,22 @@
    * Подменённый метод play().
    *
    * Логика:
-   * 1. Если есть флаг user gesture → вызываем оригинальный play()
-   * 2. Если элемент имеет атрибут data-autoplay-allowed → пропускаем
+   * 1. Если блокировка выключена effective-настройкой → вызываем оригинальный play()
+   * 2. Если есть флаг user gesture → вызываем оригинальный play()
+   * 3. Если элемент имеет атрибут data-autoplay-allowed → пропускаем
    *    (на случай, если пользователь захочет добавить whitelist)
-   * 3. Иначе → паузим элемент и возвращаем rejected Promise
+   * 4. Иначе → паузим элемент и возвращаем rejected Promise
    *
    * Возвращаем Promise, потому что оригинальный play() возвращает Promise.
    * Сайты могут обрабатывать .catch() — возвращаем корректную ошибку,
    * чтобы не ломать обработку ошибок на странице.
    */
   HTMLMediaElement.prototype.play = function () {
+    // Блокировка выключена глобально или для текущего сайта.
+    if (!blockAutoplayEffective) {
+      return originalPlay.call(this);
+    }
+
     // Пользователь взаимодействовал — разрешаем воспроизведение
     if (hasUserGesture) {
       return originalPlay.call(this);

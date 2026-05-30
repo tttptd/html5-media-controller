@@ -3,7 +3,7 @@
  *
  * Две задачи:
  * 1. Блокировка autoplay — MutationObserver + снятие атрибута autoplay
- * 2. Мост настроек — читает chrome.storage.sync и передаёт в MAIN world
+ * 2. Мост настроек — читает chrome.storage и передаёт в MAIN world
  *    через CustomEvent (speed-controller.js не имеет доступа к chrome API)
  *
  * Зачем ISOLATED world для моста:
@@ -56,13 +56,69 @@
     }));
   }
 
+  var AUTOPLAY_SITE_EXCEPTIONS_KEY = 'autoplaySiteExceptions';
+
+  function normalizeHostname(hostname) {
+    return String(hostname || '').trim().toLowerCase();
+  }
+
+  function getCurrentHostname() {
+    return normalizeHostname(window.location.hostname);
+  }
+
+  function isValidException(exception) {
+    return exception &&
+      typeof exception.host === 'string' &&
+      normalizeHostname(exception.host) !== '';
+  }
+
+  function matchesAutoplayException(hostname, exception) {
+    var host = normalizeHostname(exception.host);
+    if (!host) return false;
+
+    if (hostname === host) return true;
+
+    return exception.includeSubdomains === true &&
+      hostname.endsWith('.' + host);
+  }
+
+  function isHostnameExcepted(hostname, exceptions) {
+    if (!hostname) return false;
+
+    return exceptions
+      .filter(isValidException)
+      .some(function (exception) {
+        return matchesAutoplayException(hostname, exception);
+      });
+  }
+
   /**
-   * Загружаем настройки из chrome.storage.sync и отправляем в MAIN world.
+   * Текущее эффективное состояние блокировки autoplay для этого hostname.
+   * Глобальная настройка и локальные исключения сводятся в один флаг,
+   * чтобы ISOLATED и MAIN world принимали одинаковое решение.
+   */
+  var blockAutoplayEnabled = true;
+
+  /**
+   * Загружаем настройки из chrome.storage и отправляем в MAIN world.
    * Вызывается при инициализации и при изменении настроек.
    */
   function loadAndSendSettings() {
     chrome.storage.sync.get(DEFAULTS, function (settings) {
-      sendSettingsToMainWorld(settings);
+      chrome.storage.local.get({ autoplaySiteExceptions: [] }, function (localSettings) {
+        var exceptions = Array.isArray(localSettings[AUTOPLAY_SITE_EXCEPTIONS_KEY])
+          ? localSettings[AUTOPLAY_SITE_EXCEPTIONS_KEY]
+          : [];
+        var hostname = getCurrentHostname();
+        var blockAutoplayEffective = Boolean(settings.blockAutoplay) &&
+          !isHostnameExcepted(hostname, exceptions);
+
+        blockAutoplayEnabled = blockAutoplayEffective;
+
+        sendSettingsToMainWorld(Object.assign({}, settings, {
+          blockAutoplayEffective: blockAutoplayEffective
+        }));
+      });
     });
   }
 
@@ -72,11 +128,15 @@
    * Обновляем MAIN world без перезагрузки страницы.
    */
   chrome.storage.onChanged.addListener(function (changes, area) {
-    if (area !== 'sync') return;
+    if (area !== 'sync' && area !== 'local') return;
     loadAndSendSettings();
   });
 
-  // Отправляем настройки при загрузке.
+  // Читаем настройки сразу: isolated-блокировка должна как можно раньше узнать
+  // глобальный флаг и исключения для текущего сайта.
+  loadAndSendSettings();
+
+  // Повторно отправляем настройки при загрузке.
   // Небольшая задержка — speed-controller.js должен успеть зарегистрировать listener.
   // requestAnimationFrame гарантирует что MAIN world скрипт уже выполнился.
   if (document.readyState === 'loading') {
@@ -101,26 +161,6 @@
   // =========================================================================
 
   var MEDIA_SELECTOR = 'video, audio';
-
-  /**
-   * Текущее состояние настройки blockAutoplay.
-   * Обновляется при получении настроек из storage.
-   * По умолчанию true — блокируем до получения настроек.
-   */
-  var blockAutoplayEnabled = true;
-
-  /**
-   * Обновляем флаг blockAutoplay при получении настроек.
-   */
-  chrome.storage.sync.get({ blockAutoplay: true }, function (result) {
-    blockAutoplayEnabled = result.blockAutoplay;
-  });
-
-  chrome.storage.onChanged.addListener(function (changes, area) {
-    if (area === 'sync' && changes.blockAutoplay) {
-      blockAutoplayEnabled = changes.blockAutoplay.newValue;
-    }
-  });
 
   /**
    * Обезвреживает медиа-элемент: снимает autoplay, паузит, сбрасывает позицию.

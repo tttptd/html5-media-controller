@@ -3,6 +3,8 @@
  *
  * Настройки хранятся в chrome.storage.sync — синхронизируются между
  * устройствами пользователя (если включена синхронизация Chrome).
+ * Исключения autoplay хранятся в chrome.storage.local, чтобы whitelist
+ * оставался локальным для конкретного браузера.
  *
  * Поток данных:
  * 1. Popup загружает настройки из chrome.storage.sync
@@ -46,6 +48,8 @@
     }
   };
 
+  var AUTOPLAY_SITE_EXCEPTIONS_KEY = 'autoplaySiteExceptions';
+
   // =========================================================================
   // DOM-ссылки
   // =========================================================================
@@ -64,10 +68,51 @@
     keyAdvance: document.getElementById('keyAdvance'),
     keyPreferred: document.getElementById('keyPreferred'),
     keyToggle: document.getElementById('keyToggle'),
+    currentSiteHost: document.getElementById('currentSiteHost'),
+    exceptionExact: document.getElementById('exceptionExact'),
+    exceptionSubdomains: document.getElementById('exceptionSubdomains'),
+    toggleSiteExceptionBtn: document.getElementById('toggleSiteExceptionBtn'),
+    exceptionsList: document.getElementById('exceptionsList'),
     saveBtn: document.getElementById('saveBtn'),
     resetBtn: document.getElementById('resetBtn'),
     status: document.getElementById('status')
   };
+
+  var currentHostname = '';
+  var autoplaySiteExceptions = [];
+
+  function normalizeHostname(hostname) {
+    return String(hostname || '').trim().toLowerCase();
+  }
+
+  function getSelectedIncludeSubdomains() {
+    return els.exceptionSubdomains.checked;
+  }
+
+  function getSameRuleIndex(host, includeSubdomains) {
+    return autoplaySiteExceptions.findIndex(function (exception) {
+      return normalizeHostname(exception.host) === host &&
+        exception.includeSubdomains === includeSubdomains;
+    });
+  }
+
+  function sanitizeExceptions(exceptions) {
+    if (!Array.isArray(exceptions)) return [];
+
+    return exceptions
+      .filter(function (exception) {
+        return exception && normalizeHostname(exception.host) !== '';
+      })
+      .map(function (exception) {
+        return {
+          host: normalizeHostname(exception.host),
+          includeSubdomains: exception.includeSubdomains === true,
+          createdAt: typeof exception.createdAt === 'number'
+            ? exception.createdAt
+            : Date.now()
+        };
+      });
+  }
 
   // =========================================================================
   // Загрузка настроек из chrome.storage.sync
@@ -142,6 +187,129 @@
   }
 
   // =========================================================================
+  // Исключения autoplay
+  // =========================================================================
+
+  function loadCurrentTab() {
+    chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
+      var activeTab = tabs && tabs[0];
+      var hostname = '';
+
+      if (activeTab && activeTab.url) {
+        try {
+          hostname = normalizeHostname(new URL(activeTab.url).hostname);
+        } catch (e) {
+          hostname = '';
+        }
+      }
+
+      currentHostname = hostname;
+      renderCurrentSite();
+    });
+  }
+
+  function loadAutoplaySiteExceptions() {
+    chrome.storage.local.get({ autoplaySiteExceptions: [] }, function (result) {
+      autoplaySiteExceptions = sanitizeExceptions(result[AUTOPLAY_SITE_EXCEPTIONS_KEY]);
+      renderCurrentSite();
+      renderExceptionsList();
+    });
+  }
+
+  function saveAutoplaySiteExceptions(callback) {
+    var data = {};
+    data[AUTOPLAY_SITE_EXCEPTIONS_KEY] = autoplaySiteExceptions;
+
+    chrome.storage.local.set(data, function () {
+      renderCurrentSite();
+      renderExceptionsList();
+      showStatus();
+      if (callback) callback();
+    });
+  }
+
+  function renderCurrentSite() {
+    var includeSubdomains = getSelectedIncludeSubdomains();
+    var disabled = currentHostname === '';
+    var sameRuleExists = !disabled && getSameRuleIndex(currentHostname, includeSubdomains) !== -1;
+
+    els.currentSiteHost.textContent = disabled
+      ? 'Для этой страницы нельзя определить hostname'
+      : currentHostname;
+    els.currentSiteHost.classList.toggle('disabled', disabled);
+    els.exceptionExact.disabled = disabled;
+    els.exceptionSubdomains.disabled = disabled;
+    els.toggleSiteExceptionBtn.disabled = disabled;
+    els.toggleSiteExceptionBtn.textContent = sameRuleExists
+      ? 'Удалить текущее правило'
+      : 'Добавить текущий сайт';
+  }
+
+  function renderExceptionsList() {
+    els.exceptionsList.innerHTML = '';
+
+    if (autoplaySiteExceptions.length === 0) {
+      var empty = document.createElement('div');
+      empty.className = 'empty-list';
+      empty.textContent = 'Исключений нет';
+      els.exceptionsList.appendChild(empty);
+      return;
+    }
+
+    autoplaySiteExceptions.forEach(function (exception, index) {
+      var item = document.createElement('div');
+      item.className = 'exception-item';
+
+      var text = document.createElement('div');
+
+      var host = document.createElement('div');
+      host.className = 'exception-host';
+      host.textContent = exception.host;
+
+      var mode = document.createElement('div');
+      mode.className = 'exception-mode';
+      mode.textContent = exception.includeSubdomains
+        ? 'с поддоменами'
+        : 'только exact host';
+
+      text.appendChild(host);
+      text.appendChild(mode);
+
+      var removeBtn = document.createElement('button');
+      removeBtn.className = 'exception-remove';
+      removeBtn.type = 'button';
+      removeBtn.textContent = 'Удалить';
+      removeBtn.addEventListener('click', function () {
+        autoplaySiteExceptions.splice(index, 1);
+        saveAutoplaySiteExceptions();
+      });
+
+      item.appendChild(text);
+      item.appendChild(removeBtn);
+      els.exceptionsList.appendChild(item);
+    });
+  }
+
+  function toggleCurrentSiteException() {
+    if (!currentHostname) return;
+
+    var includeSubdomains = getSelectedIncludeSubdomains();
+    var existingIndex = getSameRuleIndex(currentHostname, includeSubdomains);
+
+    if (existingIndex !== -1) {
+      autoplaySiteExceptions.splice(existingIndex, 1);
+    } else {
+      autoplaySiteExceptions.push({
+        host: currentHostname,
+        includeSubdomains: includeSubdomains,
+        createdAt: Date.now()
+      });
+    }
+
+    saveAutoplaySiteExceptions();
+  }
+
+  // =========================================================================
   // UI-обратная связь
   // =========================================================================
 
@@ -184,7 +352,12 @@
 
   els.saveBtn.addEventListener('click', saveSettings);
   els.resetBtn.addEventListener('click', resetSettings);
+  els.exceptionExact.addEventListener('change', renderCurrentSite);
+  els.exceptionSubdomains.addEventListener('change', renderCurrentSite);
+  els.toggleSiteExceptionBtn.addEventListener('click', toggleCurrentSiteException);
 
   // Загружаем настройки при открытии popup
   loadSettings();
+  loadCurrentTab();
+  loadAutoplaySiteExceptions();
 })();

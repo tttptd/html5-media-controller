@@ -28,10 +28,12 @@ Inspired by [Video Speed Controller](https://github.com/igrigorik/videospeed) �
 - [Возможности](#возможности)
 - [Screenshots](#screenshots)
 - [Как это работает](#как-это-работает)
+- [Исключения сайтов](#исключения-сайтов)
 - [Горячие клавиши](#горячие-клавиши)
 - [Установка](#установка)
 - [Настройка](#настройка)
 - [Тестирование](#тестирование)
+- [Статическая проверка](#статическая-проверка)
 - [Структура файлов](#структура-файлов)
 - [Ограничения](#ограничения)
 
@@ -44,6 +46,8 @@ Inspired by [Video Speed Controller](https://github.com/igrigorik/videospeed) �
 - Перехватывает программные вызовы `element.play()` без user gesture
 - Удаляет атрибут `autoplay` из DOM
 - Отслеживает динамически добавленные элементы (SPA, lazy loading)
+- Позволяет отключить блокировку autoplay для отдельных сайтов
+- Поддерживает исключения только для exact host или для host вместе с поддоменами
 
 **Управление скоростью (по аналогии с videospeed):**
 - Overlay-индикатор текущей скорости на каждом видео
@@ -72,13 +76,34 @@ Inspired by [Video Speed Controller](https://github.com/igrigorik/videospeed) �
 - **MAIN** — доступ к `HTMLMediaElement.prototype.play()` и `playbackRate`. Не видит chrome API.
 
 **Мост настроек:**
-`content.js` читает настройки из `chrome.storage.sync` и передаёт в MAIN world через `CustomEvent`. Это позволяет менять настройки в popup без перезагрузки страницы.
+`content.js` читает настройки из `chrome.storage.sync`, локальные исключения из `chrome.storage.local` и передаёт effective-настройки в MAIN world через `CustomEvent`. Это позволяет менять настройки в popup без перезагрузки страницы.
 
 ### Блокировка autoplay (content.js + main-world.js)
 
 1. **Атрибут autoplay** — `content.js` через MutationObserver снимает атрибут и паузит элемент
 2. **Программный play()** — `main-world.js` подменяет `HTMLMediaElement.prototype.play()`, блокирует вызовы без user gesture
 3. **Страховка** — `content.js` слушает событие `play` на document, проверяет `navigator.userActivation`
+
+Глобальный переключатель **"Блокировать autoplay"** и исключения сайтов сводятся в один effective-флаг. Если глобальная блокировка выключена или текущий hostname попадает в исключение, `content.js` не снимает autoplay, а `main-world.js` вызывает оригинальный `play()`.
+
+### Исключения сайтов
+
+Исключения хранятся локально, под ключом `autoplaySiteExceptions` в `chrome.storage.local`. Они не синхронизируются между устройствами и не очищаются кнопкой **"Сброс"** в popup.
+
+Формат элемента:
+
+```js
+{
+  host: 'example.com',
+  includeSubdomains: true,
+  createdAt: 1770000000000
+}
+```
+
+Матчинг:
+
+- `includeSubdomains: false` — только `hostname === host`
+- `includeSubdomains: true` — `hostname === host` или `hostname.endsWith("." + host)`
 
 ### Speed Controller (speed-controller.js)
 
@@ -161,6 +186,13 @@ chrome://extensions
 - Запоминать скорость между перезагрузками
 - Блокировать autoplay (можно отключить, оставив только speed controller)
 
+**Исключения autoplay:**
+- Popup показывает hostname текущей вкладки, если его можно определить
+- Кнопка добавляет или удаляет правило для текущего hostname
+- Режим **"Только этот сайт"** применяет правило только к exact host
+- Режим **"Сайт и поддомены"** применяет правило к host и всем его поддоменам
+- Список исключений доступен даже на служебных страницах без hostname
+
 **Горячие клавиши:**
 - Кликните по полю и нажмите нужную клавишу
 - Нажмите "Сохранить" — настройки применяются мгновенно ко всем вкладкам
@@ -210,6 +242,13 @@ chrome://extensions
 
 | Сценарий | Ожидание |
 |----------|----------|
+| `blockAutoplay = false` | DOM-атрибут autoplay и `element.play()` не блокируются |
+| `blockAutoplay = true`, сайт не в исключениях | Autoplay блокируется как обычно |
+| Добавить текущий hostname в исключения | Autoplay на этом hostname не блокируется |
+| Удалить текущий hostname из исключений | Блокировка снова работает |
+| Исключение с поддоменами | Работает для host и `*.host` |
+| Перезагрузка popup или страницы | Список исключений сохраняется |
+| `chrome://` или страница без hostname | Управление текущим сайтом выключено, список доступен |
 | `<video autoplay>` | Видео на паузе |
 | `element.play()` без клика | Заблокировано |
 | Клик по play | Воспроизведение работает |
@@ -218,6 +257,12 @@ chrome://extensions
 | Перезагрузка страницы | Скорость восстановлена |
 | Сайт сбрасывает playbackRate | Скорость восстановлена |
 | Изменение настроек в popup | Применяются без перезагрузки |
+
+### Статическая проверка
+
+```bash
+git diff --check
+```
 
 ## Структура файлов
 
@@ -229,7 +274,7 @@ html5-video/
 ├── main-world.js          — Monkey-patch play() для блокировки autoplay
 ├── popup/
 │   ├── popup.html         — UI настроек
-│   └── popup.js           — Логика popup (chrome.storage.sync)
+│   └── popup.js           — Логика popup (chrome.storage.sync + chrome.storage.local)
 ├── icons/
 │   ├── icon16.png         — 16×16
 │   ├── icon48.png         — 48×48
