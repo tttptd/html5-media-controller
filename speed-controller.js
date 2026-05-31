@@ -200,6 +200,16 @@
     return isCurrentHostInList(CONFIG.PLAY_BUTTON_DISABLED_HOSTS);
   }
 
+  function isEmbeddedFrame() {
+    return window.top !== window;
+  }
+
+  function shouldDisablePlayButton() {
+    // Во встроенных плеерах центральная кнопка сайта и наша большая плашка
+    // конкурируют за один и тот же центр видео. Speed overlay при этом остаётся.
+    return isEmbeddedFrame() || isPlayButtonDisabledForCurrentHost();
+  }
+
   /**
    * Сохранить текущую скорость в localStorage.
    * Тихо игнорирует ошибки — сохранение скорости не критично.
@@ -608,7 +618,7 @@
   SpeedController.prototype._syncPlayButtonWithControls = function () {
     if (this.media.tagName === 'AUDIO') return;
 
-    if (isPlayButtonDisabledForCurrentHost()) {
+    if (shouldDisablePlayButton()) {
       this._removePlayButton();
       return;
     }
@@ -647,8 +657,8 @@
     // Для audio — не создаём (нет визуальной области)
     if (this.media.tagName === 'AUDIO') return;
 
-    // Для отдельных хостов не дублируем play/pause поверх штатного плеера.
-    if (isPlayButtonDisabledForCurrentHost()) return;
+    // Для отдельных хостов и iframe не дублируем play/pause поверх штатного плеера.
+    if (shouldDisablePlayButton()) return;
 
     // Если у видео есть нативные controls, не дублируем их своей кнопкой.
     if (this._hasVisibleNativeControls()) return;

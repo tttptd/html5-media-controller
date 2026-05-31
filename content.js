@@ -66,6 +66,20 @@
     return normalizeHostname(window.location.hostname);
   }
 
+  function isFramedDocument() {
+    return window.top !== window;
+  }
+
+  function getReferrerHostname() {
+    if (!isFramedDocument() || !document.referrer) return '';
+
+    try {
+      return normalizeHostname(new URL(document.referrer).hostname);
+    } catch (e) {
+      return '';
+    }
+  }
+
   function isValidException(exception) {
     return exception &&
       typeof exception.host === 'string' &&
@@ -92,6 +106,16 @@
       });
   }
 
+  function hasAutoplayExceptionForCurrentFrame(exceptions) {
+    var hostname = getCurrentHostname();
+    var referrerHostname = getReferrerHostname();
+
+    // В iframe autoplay-исключение принадлежит странице-владельцу,
+    // а не обязательно хосту встроенного плеера (например, player.vimeo.com).
+    return isHostnameExcepted(hostname, exceptions) ||
+      isHostnameExcepted(referrerHostname, exceptions);
+  }
+
   /**
    * Текущее эффективное состояние блокировки autoplay для этого hostname.
    * Глобальная настройка и локальные исключения сводятся в один флаг,
@@ -109,9 +133,8 @@
         var exceptions = Array.isArray(localSettings[AUTOPLAY_SITE_EXCEPTIONS_KEY])
           ? localSettings[AUTOPLAY_SITE_EXCEPTIONS_KEY]
           : [];
-        var hostname = getCurrentHostname();
         var blockAutoplayEffective = Boolean(settings.blockAutoplay) &&
-          !isHostnameExcepted(hostname, exceptions);
+          !hasAutoplayExceptionForCurrentFrame(exceptions);
 
         blockAutoplayEnabled = blockAutoplayEffective;
 
